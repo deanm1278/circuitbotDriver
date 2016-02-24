@@ -10,6 +10,7 @@
 #include <linux/kernel.h>
 #include <linux/gpio.h>       // Required for the GPIO functions
 #include <linux/interrupt.h>  // Required for the IRQ code
+#include <linux/spi/spi.h>    // Required for SPI stuff
 #include <linux/kobject.h>    // Using kobjects for the sysfs bindings
 
 MODULE_LICENSE("GPL");
@@ -26,6 +27,173 @@ static int    irqNumber;                    ///< Used to share the IRQ number wi
 enum modes { SPI, STEP_DIR };              ///< The available communication modes. SPI or step/direction
 static enum modes mode = SPI;             ///< Default mode is SPI
 static int interpPeriod	= 1;			///< Default interpolation period is 1ms
+
+//******** SPI STUFF *******//
+
+static struct spi_device *myspi;
+
+// this FIFO store is used for storing incoming data from the sysfs file
+// this stored data gets sent to the SPI device
+#define FIFOSTORESIZE 20
+#define FIFOSTOREDATASIZE 16
+typedef struct {
+	uint8_t data[FIFOSTOREDATASIZE];
+	int size;
+} fifostoreentry;
+static fifostoreentry fifostore[FIFOSTORESIZE];
+static int fifostorepos = 0;
+
+static struct workqueue_struct* spikernmodex_workqueue;
+static struct work_struct spikernmodex_work_processfifostore;
+static struct work_struct spikernmodex_work_read;
+
+// this spinlock is used for disabling interrupts while spi_sync() is running
+static DEFINE_SPINLOCK(spilock);
+static unsigned long spilockflags;
+
+// this function writes "count" bytes from "buf" to the given "reg" register
+static void spi_write_reg_burst(uint8_t reg, const uint8_t *buf, size_t count)
+{
+	struct spi_transfer t[2];
+	struct spi_message m;
+    
+	spi_message_init(&m);
+    
+	memset(t, 0, sizeof(t));
+    
+	t[0].tx_buf = &reg;
+	t[0].len = 1;
+	spi_message_add_tail(&t[0], &m);
+    
+	t[1].tx_buf = buf;
+	t[1].len = count;
+	spi_message_add_tail(&t[1], &m);
+    
+	spin_lock_irqsave(&spilock, spilockflags);
+	spi_sync(myspi, &m);
+	spin_unlock_irqrestore(&spilock, spilockflags);
+}
+
+// this function is called when writing to the "store" sysfs file
+static ssize_t spikernmodex_store_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	if (count > FIFOSTOREDATASIZE) {
+		printk(KERN_ERR "can't store data because it's too big.");
+		return 0;
+	}
+    
+	if (fifostorepos >= FIFOSTORESIZE) {
+		printk(KERN_ERR "can't store data because fifo is full.");
+		return 0;
+	}
+    
+	printk(KERN_DEBUG "store_store(): storing %d bytes to store pos 0x%.2x\n", count, fifostorepos);
+    
+	memcpy(fifostore[fifostorepos].data, buf, count);
+	fifostore[fifostorepos].size = count;
+	fifostorepos++;
+    
+	printk(KERN_DEBUG "queueing work PROCESSFIFOSTORE\n");
+	queue_work(spikernmodex_workqueue, &spikernmodex_work_processfifostore);
+    
+	return count;
+}
+
+void spikernmodex_workqueue_handler(struct work_struct *work) {
+	int i, j;
+    
+	// this work outputs all data stored in the FIFO to the SPI device
+	if (work == &spikernmodex_work_processfifostore) {
+		printk(KERN_DEBUG "work PROCESSFIFOSTORE called\n");
+        
+		while (fifostorepos > 0) { // processing all items in the fifo store
+			printk(KERN_DEBUG "%d entries in fifo store\n", fifostorepos);
+            
+			printk(KERN_DEBUG "sending %d bytes\n", fifostore[0].size);
+			BEAGLEBONE_LED3ON;
+			spi_write_reg_burst(SPIDEVDATAREG, fifostore[0].data, fifostore[0].size);
+			BEAGLEBONE_LED3OFF;
+            
+			// left shifting the FIFO store
+			for (i = 1; i < FIFOSTORESIZE; i++) {
+				for (j = 0; j < fifostore[i].size; j++)
+					fifostore[i-1].data[j] = fifostore[i].data[j];
+				fifostore[i-1].size = fifostore[i].size;
+			}
+			fifostorepos--;
+		}
+	}
+    
+	// this work reads some data from the SPI device to the ringbuffer
+	if (work == &spikernmodex_work_read) {
+		printk(KERN_DEBUG "work READ called, ringbuf %.2x\n", ringbufferpos);
+        
+		memset(&ringbuffer[ringbufferpos].data, 0, RINGBUFFERDATASIZE);
+		ringbuffer[ringbufferpos].used = 1;
+        
+		BEAGLEBONE_LED4ON;
+		spi_read_reg_burst(SPIDEVDATAREG, ringbuffer[ringbufferpos].data, RINGBUFFERDATASIZE);
+		ringbuffer[ringbufferpos].size = RINGBUFFERDATASIZE;
+		BEAGLEBONE_LED4ON;
+        
+		printk(KERN_DEBUG "read stopped, ringbuf %.2x\n", ringbufferpos);
+		ringbuffer[ringbufferpos].completed = 1;
+        
+		ringbufferpos++;
+		if (ringbufferpos == RINGBUFFERSIZE)
+			ringbufferpos = 0;
+	}
+    
+	printk(KERN_DEBUG "work exit\n");
+}
+
+
+// this functions gets called when the user reads the sysfs file "somereg" USED FOR TESTING
+static ssize_t spikernmodex_somereg_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	// outputting the value of register "SOMEREG"
+	return sprintf(buf, "%x\n", spi_read_reg(SOMEREG));
+}
+
+// this function gets called when the user writes the sysfs file "somereg" USED FOR TESTING
+static ssize_t spikernmodex_somereg_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	unsigned int val;
+	sscanf(buf, "%x", &val);
+	spi_write_reg(SOMEREG, (uint8_t)val);
+	printk(KERN_DEBUG "stored %.2x to register SOMEREG\n", (uint8_t)val);
+	return count;
+}
+
+//TODO: THIS SHOULD PRINT WHAT'S TO BE WRITTEN TO DEVICE
+// this function is called when reading from the "store" sysfs file
+static ssize_t spikernmodex_store_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int currentbufsize;
+	int i = ringbufferpos+1;
+    
+	if (i == RINGBUFFERSIZE)
+		i = 0;
+    
+	while (i != ringbufferpos) {
+		if (ringbuffer[i].completed) {
+			currentbufsize = ringbuffer[i].size;
+			// we found a used & completed slot, outputting
+			printk(KERN_DEBUG "store_show(): outputting ringbuf %.2x, %d bytes\n", i, currentbufsize);
+			memcpy(buf, ringbuffer[i].data, currentbufsize);
+			ringbuffer[i].completed = ringbuffer[i].used = 0;
+			return currentbufsize;
+		}
+        
+		i++;
+		if (i == RINGBUFFERSIZE)
+			i = 0;
+	}
+    
+    return 0;
+}
+
+//*************************//
 
 /// Function prototype for the custom IRQ handler function -- see below for the implementation
 static irq_handler_t  rdy_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs);
@@ -76,10 +244,17 @@ static ssize_t period_store(struct kobject *kobj, struct kobj_attribute *attr, c
 static struct kobj_attribute period_attr = __ATTR(interpPeriod, 0660, period_show, period_store);
 static struct kobj_attribute mode_attr = __ATTR(mode, 0660, mode_show, mode_store);
 
+//************ SPI STUFF *********//
+static struct kobj_attribute store_attribute = __ATTR(data, 0660, spikernmodex_store_show, spikernmodex_store_store);
+static struct kobj_attribute somereg_attribute = __ATTR(addr, 0660, spikernmodex_somereg_show, spikernmodex_somereg_store);
+//********************************//
+
 /** The drv_attrs[] is an array of attributes that is used to create the attribute group below.
  *  The attr property of the kobj_attribute is used to extract the attribute struct
  */
 static struct attribute *drv_attrs[] = {
+   &store_attribute.attr,                   // data to be written
+   &somereg_attribute.attr,                 // read or write register
    &period_attr.attr,                       // The servo cycle or interpolation period
    &mode_attr.attr,                         // what is the communication mode for the driver
    NULL,
@@ -93,6 +268,64 @@ static struct attribute_group attr_group = {
    .name  = gpioName,                        // The name is generated in drv_init()
    .attrs = drv_attrs,                      // The attributes array defined just above
 };
+
+//*********** SPI STUFF **************//
+
+static int __devinit spikernmodex_probe(struct spi_device *spi); // prototype
+static int spikernmodex_remove(struct spi_device *spi); // prototype
+
+// this is the spi driver structure which has the driver name and the two
+// functions to call when probing and removing
+static struct spi_driver spikernmodex_driver = {
+	.driver = {
+		.name = "spikernmodex", // be sure to match this with the spi_board_info modalias in arch/am/mach-omap2/board-am335xevm.c
+		.owner = THIS_MODULE
+	},
+	.probe = spikernmodex_probe,
+    .remove = __devexit_p(spikernmodex_remove)
+};
+
+// this function gets called when a matching modalias and driver name found
+static int __devinit spikernmodex_probe(struct spi_device *spi)
+{
+	int err;
+    
+	printk(KERN_DEBUG "spikernmodex_probe() called.\n");
+    
+	// initalizing SPI interface
+	myspi = spi;
+	myspi->max_speed_hz = 5000000; // get this from your SPI device's datasheet
+	spi_setup(myspi);
+    
+	// initializing device
+	spi_cmd(SOMEKINDOFRESETCOMMAND);
+	mdelay(100);
+    
+	// initializing workqueue
+	spikernmodex_workqueue = create_singlethread_workqueue("spikernmodex_workqueue");
+	INIT_WORK(&spikernmodex_work_processfifostore, spikernmodex_workqueue_handler);
+	INIT_WORK(&spikernmodex_work_read, spikernmodex_workqueue_handler);
+    
+	spikernmodex_clearringbuffer();
+    
+	printk(KERN_INFO "Example SPI driver by Nonoo (www.nonoo.hu) loaded.\n");
+    
+	return err;
+}
+
+// this function gets called when our example SPI driver gets removed with spi_unregister_driver()
+static int spikernmodex_remove(struct spi_device *spi)
+{
+	printk(KERN_DEBUG "spikernmodex_remove() called.\n");
+    
+	// destroying the workqueue
+	flush_workqueue(spikernmodex_workqueue);
+	destroy_workqueue(spikernmodex_workqueue);
+    
+	return 0;
+}
+
+//************************************//
 
 static struct kobject *drv_kobj;            /// The pointer to the kobject
 
@@ -138,6 +371,15 @@ static int __init drv_init(void){
                         IRQflags,              // Use the custom kernel param to set interrupt type
                         "drv_rdy_handler",  // Used in /proc/interrupts to identify the owner
                         NULL);
+    
+    //********* SPI STUFF *******//
+    // registering SPI driver, this will call spikernmodex_probe()
+	result = spi_register_driver(&spikernmodex_driver);
+	if (result < 0) {
+		printk(KERN_ERR "spi_register_driver() failed %d\n", result);
+		return result;
+	}
+    //*************************//
 
    return result;
 }
@@ -151,6 +393,11 @@ static void __exit drv_exit(void){
    free_irq(irqNumber, NULL);               // Free the IRQ number, no *dev_id required in this case
    gpio_unexport(gpioRDY);                  // Unexport the Button GPIO
    gpio_free(gpioRDY);                      // Free the RDY GPIO
+    
+   //******* SPI STUFF ***************//
+    spi_unregister_driver(&spikernmodex_driver);
+    //*******************************//
+    
    printk(KERN_INFO "DRV: DRV LKM has been unloaded!\n");
 }
 
