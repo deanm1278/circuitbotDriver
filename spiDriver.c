@@ -17,10 +17,10 @@
 #include <linux/proc_fs.h>
 #include <linux/mutex.h>
 #include <linux/kfifo.h>
+#include <linux/workqueue.h>
+#include <asm/uaccess.h>
 
-#ifndef VM_RESERVED
-#define VM_RESERVED (VM_DONTEXPAND | VM_DONTDUMP)
-#endif
+#include "spiDriver.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Dean Miller");
@@ -45,8 +45,12 @@ struct servodrv {
     struct  miscdevice      miscdev;
     struct  spi_device      *myspi;       //spi device
     struct  kfifo           fifo;
-    unsigned int            intpin;
+    unsigned int            intpin;         //the pin the RDY interrupt is attached to
     unsigned int            irqnumber;
+    unsigned char           datawidth;      //number of bytes per data element
+    unsigned char           elementspertxn;  //number of data elements per transaction
+    struct workqueue_struct*    workqueue;
+    struct work_struct      work_write;
 };
 
 /// Function prototype for the custom IRQ handler function -- see below for the implementation
@@ -72,9 +76,47 @@ static int servodrv_f_open(struct inode *inode, struct file *filp)
 static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     struct servodrv *drv = filp->private_data;
-    //struct device *dev = drv->miscdev.this_device;
+    unsigned char q;
     
-    printk(KERN_INFO "DRV: IOCTL command received.\n");
+    switch(cmd){
+        case SERVODRV_GET_DATAWIDTH:
+            q = drv->datawidth;
+            if (copy_to_user((unsigned char *)arg, &q, sizeof(unsigned char)))
+            {
+                return -EACCES;
+            }
+            break;
+        case SERVODRV_SET_DATAWIDTH:
+            if (copy_from_user(&q, (unsigned char *)arg, sizeof(unsigned char)))
+            {
+                return -EACCES;
+            }
+            drv->datawidth = q;
+            break;
+        case SERVODRV_GET_ELEMENTS_PER_TXN:
+            q = drv->elementspertxn;
+            if (copy_to_user((unsigned char *)arg, &q, sizeof(unsigned char)))
+            {
+                return -EACCES;
+            }
+            break;
+        case SERVODRV_SET_ELEMENTS_PER_TXN:
+            if (copy_from_user(&q, (unsigned char *)arg, sizeof(unsigned char)))
+            {
+                return -EACCES;
+            }
+            drv->elementspertxn = q;
+            break;
+        case SERVODRV_WRITE_READY:
+            q = kfifo_avail(&drv->fifo) > drv->datawidth * drv->elementspertxn;
+            if (copy_to_user((unsigned char *)arg, &q, sizeof(unsigned char)))
+            {
+                return -EACCES;
+            }
+            break;
+    }
+    
+    //printk(KERN_INFO "DRV: IOCTL command received.\n");
     
     return 0;
 }
@@ -122,6 +164,31 @@ static const struct file_operations servodrv_fops = {
     .read           =   servodrv_f_read,
 };
 
+
+void servodrv_workqueue_handler(struct work_struct *work){
+    int status;
+    unsigned char txbuf[8];
+    struct servodrv *drv;
+    drv = container_of(work, struct servodrv, work_write);
+    
+    //TODO: wait till there is something in the fifo to output data
+    //printk(KERN_INFO "DRV: queuing work...\n");
+    //while(kfifo_is_empty(&drv->fifo));
+    
+    printk(KERN_INFO "DRV: work process write processing\n");
+        
+    status = mutex_lock_interruptible(&read_lock);
+
+    status = kfifo_out(&drv->fifo, &txbuf, 8);
+
+    mutex_unlock(&read_lock);
+    
+    status = spi_write(drv->myspi, &txbuf[0], 8);
+        if (status < 0)
+                printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
+                        status);
+}
+
 //TODO: may want to put some useful attributes in here
 //declare attributes
 static struct kobj_attribute test_attr = __ATTR(test, 0660, NULL, NULL);
@@ -163,7 +230,10 @@ static int servodrv_spi_probe(struct spi_device *spi){
     dev = drv->miscdev.this_device;
     dev_set_drvdata(dev, drv);
     
+    //set defaults
     drv->intpin = SERVODRV_INT_PIN;
+    drv->datawidth = DEFAULT_DATA_WIDTH;
+    drv->elementspertxn = DEFAULT_ELEMENTS_PER_TXN;
     
     gpio_request(drv->intpin, "sysfs");       // Set up the gpio interrupt
     gpio_direction_input(drv->intpin);        // Set the button GPIO to be an input
@@ -179,7 +249,15 @@ static int servodrv_spi_probe(struct spi_device *spi){
                          (irq_handler_t) servodrv_irq_handler, // The pointer to the handler function below
                          IRQF_TRIGGER_RISING,   // Interrupt on rising edge (button press, not release)
                          "servodrv_interrupt_handler",    // Used in /proc/interrupts to identify the owner
-                         drv); 
+                         drv);
+    if(err){
+        printk(KERN_ERR "DRV: error requesting irq.\n");
+        goto failirq;
+    }
+    
+    // initializing workqueue
+    drv->workqueue = create_singlethread_workqueue("servodrv_workqueue");
+    INIT_WORK(&drv->work_write, servodrv_workqueue_handler);
     
     //initialize SPI interface
     drv->myspi = spi;
@@ -214,20 +292,27 @@ faildreg:
 failproccreate:
         kfree(drv);
 failfifoalloc:
+        free_irq(drv->irqnumber, NULL); //free irq   
+failirq:
+        gpio_unexport(drv->intpin);
+        gpio_free(drv->intpin);
 	misc_deregister(&drv->miscdev);
 fail:
     return -1;
 }
 
 static int servodrv_spi_remove(struct spi_device *spi){
-    //TODO: all this
     int err = 0;
     struct servodrv *drv = spi_get_drvdata(spi);
     struct device *dev = drv->miscdev.this_device;
     
     printk(KERN_INFO "DRV: removing device...\n");
     
-    free_irq(drv->irqnumber, NULL); //free irq
+    // destroying the workqueue
+    flush_workqueue(drv->workqueue);
+    destroy_workqueue(drv->workqueue);
+    
+    free_irq(drv->irqnumber, drv); //free irq
     gpio_unexport(drv->intpin);
     gpio_free(drv->intpin);
     
@@ -246,22 +331,12 @@ static int servodrv_spi_remove(struct spi_device *spi){
 }
 
 static irq_handler_t servodrv_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs){
-    int status;
-    unsigned char txbuf[8];
     struct servodrv *drv = dev_id;
     
-   //printk(KERN_INFO "DRV: interrupt received.\n");
-    
-    status = mutex_lock_interruptible(&read_lock)
-
-    status = kfifo_out(&drv->fifo, &txbuf, 8);
-
-    mutex_unlock(&read_lock);
-    
-    status = spi_write(drv->myspi, &txbuf[0], 8);
-        if (status < 0)
-                printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
-                        status);
+   printk(KERN_INFO "DRV: interrupt received.\n");
+   
+   if(!work_busy(&drv->work_write))
+    queue_work(drv->workqueue, &drv->work_write); 
     
    return (irq_handler_t) IRQ_HANDLED;      // Announce that the IRQ has been handled correctly
 }
