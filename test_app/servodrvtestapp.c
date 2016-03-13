@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include "libservodrv.h"
  
 int main ( int argc, char **argv )
@@ -13,7 +14,9 @@ int main ( int argc, char **argv )
         return 1;
     }
     
-    servodrv_write(drv, "this is a test", 14);
+    uint16_t buf[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 ,17 ,18};
+    
+    servodrv_write(drv, buf, sizeof(buf));
     
     printf("write successful\n");
     

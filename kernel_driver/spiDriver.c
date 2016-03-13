@@ -39,6 +39,12 @@ MODULE_VERSION("0.1");
 /* name of the proc entry */
 #define	PROC_FIFO	"servodrv-fifo"
 
+/* max length for the spi tx buffer */
+#define BUF_MAX_LEN     100
+
+/* spi speed */
+#define SPI_MAX_SPEED   15000000
+
 /* lock for procfs read access */
 static DEFINE_MUTEX(read_lock);
 
@@ -180,8 +186,8 @@ static const struct file_operations servodrv_fops = {
 
 
 void servodrv_workqueue_handler(struct work_struct *work){
-    int status;
-    unsigned char txbuf[8];
+    int status, i;
+    unsigned char txbuf[BUF_MAX_LEN];
     struct servodrv *drv;
     drv = container_of(work, struct servodrv, work_write);
     
@@ -189,26 +195,32 @@ void servodrv_workqueue_handler(struct work_struct *work){
     printk(KERN_INFO "DRV: work handler called...\n");
 #endif
     
-    //wait till we get the signal that there is data ready
-    status = down_interruptible(&drv->fifo_lock);
+    //send data till a signal is received that the device is no longer ready
+    while(gpio_get_value(drv->intpin)){
     
+        //wait till we get the signal that there is data ready
+        status = down_interruptible(&drv->fifo_lock);
+
 #ifdef SERVODRV_DEBUG
     printk(KERN_INFO "DRV: work process write processing\n");
 #endif
-    //status = mutex_lock_interruptible(&read_lock);
+        //status = mutex_lock_interruptible(&read_lock);
 
-    status = kfifo_out(&drv->fifo, &txbuf, 8);
+        status = kfifo_out(&drv->fifo, &txbuf, drv->datawidth * drv->elementspertxn);
 
-    //mutex_unlock(&read_lock);
-    if(!kfifo_is_empty(&drv->fifo))
-    {
-        up(&drv->fifo_lock);
+        //mutex_unlock(&read_lock);
+        for(i=0; i<drv->elementspertxn;i++){
+            status = spi_write(drv->myspi, &txbuf[i*drv->datawidth], drv->datawidth);
+                if (status < 0)
+                        printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
+                                status);
+        }
+
+        if(!kfifo_is_empty(&drv->fifo))
+        {
+            up(&drv->fifo_lock);
+        }
     }
-    
-    status = spi_write(drv->myspi, &txbuf[0], 8);
-        if (status < 0)
-                printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
-                        status);
 }
 
 //TODO: may want to put some useful attributes in here
@@ -288,7 +300,8 @@ static int servodrv_spi_probe(struct spi_device *spi){
     
     //initialize SPI interface
     drv->myspi = spi;
-    drv->myspi->max_speed_hz = 4000000;
+    drv->myspi->max_speed_hz = SPI_MAX_SPEED;
+    drv->myspi->bits_per_word = drv->datawidth * 8;
     spi_setup(drv->myspi);
     spi_set_drvdata(spi, drv);
     
