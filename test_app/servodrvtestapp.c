@@ -20,6 +20,9 @@ int main ( int argc, char **argv )
     
     printf("write successful\n");
     
+    int avail = servodrv_avail(drv);
+    printf("%d available transactions in buffer.\n", avail);
+    
     servodrv_close(drv);
     
     printf("test app successfully completed!\n");

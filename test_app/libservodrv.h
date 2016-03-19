@@ -47,6 +47,7 @@ int servodrv_get_elements_per_txn(int fd);
 int servodrv_set_elements_per_txn(int fd, unsigned char elements_per_txn);
 
 int servodrv_write_ready(int fd);
+int servodrv_avail(int fd);
 
 size_t servodrv_write(int fd, const void *buf, size_t len);
 

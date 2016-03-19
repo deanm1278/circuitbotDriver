@@ -21,6 +21,7 @@
 #define SERVODRV_GET_ELEMENTS_PER_TXN           _IOR('q', 3, unsigned char *)
 #define SERVODRV_SET_ELEMENTS_PER_TXN           _IOW('q', 4, unsigned char *)
 #define SERVODRV_WRITE_READY                    _IOR('q', 5, unsigned char *)
+#define SERVODRV_GET_FIFO_SPACE                 _IOR('q', 6, int *)
 
 
 #define DEFAULT_DATA_WIDTH          2

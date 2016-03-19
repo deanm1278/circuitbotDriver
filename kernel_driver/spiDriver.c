@@ -89,6 +89,7 @@ static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long 
 {
     struct servodrv *drv = filp->private_data;
     unsigned char q;
+    int i;
     
     switch(cmd){
         case SERVODRV_GET_DATAWIDTH:
@@ -122,6 +123,13 @@ static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long 
         case SERVODRV_WRITE_READY:
             q = kfifo_avail(&drv->fifo) > drv->datawidth * drv->elementspertxn;
             if (copy_to_user((unsigned char *)arg, &q, sizeof(unsigned char)))
+            {
+                return -EACCES;
+            }
+            break;
+        case SERVODRV_GET_FIFO_SPACE:
+            i = kfifo_avail(&drv->fifo) / (drv->datawidth * drv->elementspertxn);
+            if (copy_to_user((int *)arg, &i, sizeof(int)))
             {
                 return -EACCES;
             }
@@ -223,12 +231,32 @@ void servodrv_workqueue_handler(struct work_struct *work){
     }
 }
 
-//TODO: may want to put some useful attributes in here
+//print the elements in the buffer in a human readable fashion. Useful for debugging.
+static ssize_t servodrv_buffer_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+    int len, ret;
+    struct servodrv *drv = dev_get_drvdata(dev);
+    
+    #ifdef SERVODRV_DEBUG
+    printk(KERN_INFO "DRV: buffer show command received.\n");
+    #endif
+    
+    //if (mutex_lock_interruptible(&read_lock))
+    //        return -ERESTARTSYS;
+    
+    len = kfifo_len(&drv->fifo);
+    ret = kfifo_out(&drv->fifo, buf, len);
+
+    //mutex_unlock(&read_lock);
+
+    return ret;
+}
+
 //declare attributes
-static struct kobj_attribute test_attr = __ATTR(test, 0660, NULL, NULL);
+static DEVICE_ATTR(buffer, 0660, servodrv_buffer_show, NULL);
 
 static struct attribute *attrs[] = {
-    &test_attr.attr,
+    &dev_attr_buffer.attr,
     NULL,
 };
 

@@ -21,6 +21,7 @@
 #define SERVODRV_GET_ELEMENTS_PER_TXN           _IOR('q', 3, unsigned char *)
 #define SERVODRV_SET_ELEMENTS_PER_TXN           _IOW('q', 4, unsigned char *)
 #define SERVODRV_WRITE_READY                    _IOR('q', 5, unsigned char *)
+#define SERVODRV_GET_FIFO_SPACE                 _IOR('q', 6, int *)
 
 
 int servodrv_open(void){
@@ -80,6 +81,19 @@ int servodrv_write_ready(int fd){
     if (ioctl(fd, SERVODRV_WRITE_READY, &ret) == -1)
     {
         perror("ioctl get error: servodrv_write_ready");
+        return -1;
+    }
+    else
+    {
+        return ret;
+    }
+}
+
+int servodrv_avail(int fd){
+    unsigned int ret;
+    if (ioctl(fd, SERVODRV_GET_FIFO_SPACE, &ret) == -1)
+    {
+        perror("ioctl get error: servodrv_avail");
         return -1;
     }
     else
