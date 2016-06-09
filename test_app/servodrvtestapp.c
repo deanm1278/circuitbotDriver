@@ -14,6 +14,11 @@ int main ( int argc, char **argv )
         return 1;
     }
     
+    char string[20];
+    servodrv_get_firmware_version(drv, string);
+    printf(string);
+    
+    /*
     uint16_t buf[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 ,17 ,18};
     
     servodrv_write(drv, buf, sizeof(buf));
@@ -24,7 +29,7 @@ int main ( int argc, char **argv )
     printf("%d available transactions in buffer.\n", avail);
     
     servodrv_close(drv);
-    
+    */
     printf("test app successfully completed!\n");
     return 0;
 }

@@ -89,6 +89,7 @@ static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long 
 {
     struct servodrv *drv = filp->private_data;
     unsigned char q;
+    char string[20]; //version will be put here
     int i;
     
     switch(cmd){
@@ -133,6 +134,16 @@ static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long 
             {
                 return -EACCES;
             }
+            break;
+        case SERVODRV_GET_FIRMWARE_VERSION:
+            //TODO: read version from hardware into string
+            if (copy_to_user((char *)arg, string, sizeof(string)))
+            {
+                return -EACCES;
+            }
+            break;
+        case SERVODRV_BEGIN_TRANSMISSION:
+            //TODO: send OP_BEGIN_TRANSMISSION opcode to the hardware telling it to enable motors and begin accepting motion data
             break;
     }
 #ifdef SERVODRV_DEBUG

@@ -22,6 +22,7 @@
 #define SERVODRV_SET_ELEMENTS_PER_TXN           _IOW('q', 4, unsigned char *)
 #define SERVODRV_WRITE_READY                    _IOR('q', 5, unsigned char *)
 #define SERVODRV_GET_FIFO_SPACE                 _IOR('q', 6, int *)
+#define SERVODRV_GET_FIRMWARE_VERSION           _IOR('q', 7, char *)
 
 
 int servodrv_open(void){
@@ -64,6 +65,18 @@ int servodrv_get_elements_per_txn(int fd){
     else
     {
         return ret;
+    }
+}
+
+int servodrv_get_firmware_version(int fd, char string[]){
+    if (ioctl(fd, SERVODRV_GET_FIRMWARE_VERSION, string) == -1)
+    {
+        perror("ioctl get error: servodrv_get_elements_per_txn");
+        return -1;
+    }
+    else
+    {
+        return 0;
     }
 }
 

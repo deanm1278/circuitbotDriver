@@ -22,10 +22,13 @@
 #define SERVODRV_SET_ELEMENTS_PER_TXN           _IOW('q', 4, unsigned char *)
 #define SERVODRV_WRITE_READY                    _IOR('q', 5, unsigned char *)
 #define SERVODRV_GET_FIFO_SPACE                 _IOR('q', 6, int *)
-
+#define SERVODRV_GET_FIRMWARE_VERSION           _IOR('q', 7, char *)
+#define SERVODRV_BEGIN_TRANSMISSION             _IO('q', 8)
 
 #define DEFAULT_DATA_WIDTH          2
 #define DEFAULT_ELEMENTS_PER_TXN    3
+
+#define OP_BEGIN_TRANSMISSION       0x01
 
 #endif /* SPIDRIVER_H */
 
