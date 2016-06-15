@@ -42,6 +42,7 @@ extern int servodrv_open(void);
 extern int servodrv_close(int fd);
 
 int servodrv_get_firmware_version(int fd, char string[]);
+int servodrv_begin_transmission(int fd);
 
 int servodrv_get_data_width(int fd);
 int servodrv_set_data_width(int fd, unsigned char data_width);

@@ -23,6 +23,7 @@
 #define SERVODRV_WRITE_READY                    _IOR('q', 5, unsigned char *)
 #define SERVODRV_GET_FIFO_SPACE                 _IOR('q', 6, int *)
 #define SERVODRV_GET_FIRMWARE_VERSION           _IOR('q', 7, char *)
+#define SERVODRV_BEGIN_TRANSMISSION             _IO('q', 8)
 
 
 int servodrv_open(void){
@@ -112,6 +113,18 @@ int servodrv_avail(int fd){
     else
     {
         return ret;
+    }
+}
+
+int servodrv_begin_transmission(int fd){
+    if (ioctl(fd, SERVODRV_BEGIN_TRANSMISSION) == -1)
+    {
+        perror("ioctl get error: servodrv_begin_transmission");
+        return -1;
+    }
+    else
+    {
+        return 0;
     }
 }
 

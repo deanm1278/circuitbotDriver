@@ -34,7 +34,7 @@ MODULE_VERSION("0.1");
 #define SERVODRV_INT_PIN    115
 
 /* fifo size in elements (bytes) */
-#define FIFO_SIZE	4096
+#define FIFO_SIZE	8192
 
 /* name of the proc entry */
 #define	PROC_FIFO	"servodrv-fifo"
@@ -43,7 +43,7 @@ MODULE_VERSION("0.1");
 #define BUF_MAX_LEN     100
 
 /* spi speed */
-#define SPI_MAX_SPEED   15000000
+#define SPI_MAX_SPEED   4000000
 
 /* lock for procfs read access */
 static DEFINE_MUTEX(read_lock);
@@ -90,7 +90,7 @@ static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long 
     struct servodrv *drv = filp->private_data;
     unsigned char q;
     char string[20]; //version will be put here
-    int i;
+    int i, status;
     
     switch(cmd){
         case SERVODRV_GET_DATAWIDTH:
@@ -142,8 +142,21 @@ static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long 
                 return -EACCES;
             }
             break;
-        case SERVODRV_BEGIN_TRANSMISSION:
-            //TODO: send OP_BEGIN_TRANSMISSION opcode to the hardware telling it to enable motors and begin accepting motion data
+		case SERVODRV_BEGIN_TRANSMISSION: {
+			unsigned char txbuf[] = { OP_BEGIN_TRANSMISSION, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+
+			printk(KERN_INFO "DRV: begin transmission ioctl received");
+			status = spi_write(drv->myspi, &txbuf[0], drv->datawidth);
+			if (status < 0)
+					printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
+					status);
+			for(i=0; i<3; i++){
+				status = spi_write(drv->myspi, &txbuf[2 + 2*i], drv->datawidth);
+				if (status < 0)
+					printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
+					status);
+				}
+			}
             break;
     }
 #ifdef SERVODRV_DEBUG
