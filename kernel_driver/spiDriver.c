@@ -158,6 +158,10 @@ static long servodrv_f_ioctl(struct file *filp, unsigned int cmd, unsigned long 
 				}
 			}
             break;
+		case SERVODRV_CLEAR_BUFFER: {
+			printk(KERN_INFO "DRV: clearing buffer");
+			kfifo_reset(&drv->fifo);
+		}
     }
 #ifdef SERVODRV_DEBUG
     printk(KERN_INFO "DRV: IOCTL command received.\n");
@@ -238,15 +242,18 @@ void servodrv_workqueue_handler(struct work_struct *work){
 #endif
         //status = mutex_lock_interruptible(&read_lock);
 
-        status = kfifo_out(&drv->fifo, &txbuf, drv->datawidth * drv->elementspertxn);
+    	if(!kfifo_is_empty(&drv->fifo))
+        {
+			status = kfifo_out(&drv->fifo, &txbuf, drv->datawidth * drv->elementspertxn);
 
-        //mutex_unlock(&read_lock);
-        for(i=0; i<drv->elementspertxn;i++){
-            status = spi_write(drv->myspi, &txbuf[i*drv->datawidth], drv->datawidth);
-                if (status < 0)
-                        printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
-                                status);
-        }
+			//mutex_unlock(&read_lock);
+			for(i=0; i<drv->elementspertxn;i++){
+				status = spi_write(drv->myspi, &txbuf[i*drv->datawidth], drv->datawidth);
+					if (status < 0)
+							printk(KERN_ERR "DRV: FAILURE: spi_write() failed with status %d\n",
+									status);
+			}
+		}
 
         if(!kfifo_is_empty(&drv->fifo))
         {

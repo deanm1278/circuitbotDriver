@@ -24,6 +24,7 @@
 #define SERVODRV_GET_FIFO_SPACE                 _IOR('q', 6, int *)
 #define SERVODRV_GET_FIRMWARE_VERSION           _IOR('q', 7, char *)
 #define SERVODRV_BEGIN_TRANSMISSION             _IO('q', 8)
+#define SERVODRV_CLEAR_BUFFER		            _IO('q', 9)
 
 #define DEFAULT_DATA_WIDTH          2
 #define DEFAULT_ELEMENTS_PER_TXN    3

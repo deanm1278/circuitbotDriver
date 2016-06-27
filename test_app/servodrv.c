@@ -24,6 +24,7 @@
 #define SERVODRV_GET_FIFO_SPACE                 _IOR('q', 6, int *)
 #define SERVODRV_GET_FIRMWARE_VERSION           _IOR('q', 7, char *)
 #define SERVODRV_BEGIN_TRANSMISSION             _IO('q', 8)
+#define SERVODRV_CLEAR_BUFFER		            _IO('q', 9)
 
 
 int servodrv_open(void){
@@ -119,13 +120,25 @@ int servodrv_avail(int fd){
 int servodrv_begin_transmission(int fd){
     if (ioctl(fd, SERVODRV_BEGIN_TRANSMISSION) == -1)
     {
-        perror("ioctl get error: servodrv_begin_transmission");
+        perror("ioctl error: servodrv_begin_transmission");
         return -1;
     }
     else
     {
         return 0;
     }
+}
+
+int servodrv_clear_buffer(int fd){
+	if (ioctl(fd, SERVODRV_CLEAR_BUFFER) == -1)
+	{
+		perror("ioctl error: servodrv_clear_buffer");
+		return -1;
+	}
+	else
+	{
+		return 0;
+	}
 }
 
 size_t servodrv_write(int fd, const void *buf, size_t len){
